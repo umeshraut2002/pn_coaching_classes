@@ -1,0 +1,23 @@
+{
+  "name": "pn-coaching-classes",
+  "private": true,
+  "workspaces": [
+    "backend-auth",
+    "backend-student",
+    "backend-notification",
+    "frontend-main",
+    "frontend-admission",
+    "frontend-admin"
+  ],
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "docker compose up --build",
+    "dev:infra": "docker compose up --build mongo nginx",
+    "lint": "npm -ws run lint",
+    "test": "npm -ws run test",
+    "build": "npm -ws run build"
+  }
+}
+
