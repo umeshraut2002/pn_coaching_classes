@@ -253,20 +253,477 @@ All Docker, monitoring, and deployment assets will live under `deployment/`, mak
 
 ---
 
-# Next Phase: AWS Infrastructure
+---
 
-Now we'll stop looking at application code and start behaving like cloud engineers.
+# High-Level Design (HLD)
 
-The next phase is **Infrastructure Design**, where we'll build the AWS foundation before deploying any containers.
+The HLD describes the major components and how they interact, without diving into implementation details.
 
-We'll cover:
+```text
+                                   Users
+                                     │
+                          HTTPS (443) Requests
+                                     │
+                               (Future DNS)
+                                 Route53
+                                     │
+                            SSL Certificate (ACM)
+                                     │
+                        Application Load Balancer
+                                     │
+                          Nginx Reverse Proxy
+                                     │
+      ┌──────────────────────────────┼──────────────────────────────┐
+      │                              │                              │
+      ▼                              ▼                              ▼
+frontend-main               frontend-admission             frontend-admin
+      │                              │                              │
+      └──────────────────────────────┼──────────────────────────────┘
+                                     │
+                              REST API Calls
+                                     │
+             ┌───────────────────────┼─────────────────────────┐
+             │                       │                         │
+             ▼                       ▼                         ▼
+      backend-auth          backend-student      backend-notification
+             │                       │                         │
+             │                       ├──────────────┐          │
+             │                       │              │          │
+             ▼                       ▼              ▼          ▼
+     JWT Authentication       MongoDB Atlas     File Upload   SMTP Server
+                                      │
+                                      ▼
+                            AWS Secrets Manager
 
-1. **AWS account preparation** (IAM user, AWS CLI, key pairs).
-2. **VPC design** with CIDR planning.
-3. **Public and private subnets**.
-4. **Internet Gateway and route tables**.
-5. **Security Groups** with least-privilege rules.
-6. **EC2 sizing** and operating system selection.
-7. **Why each networking decision is made**, as you would be expected to explain in an interview.
+────────────────────────────────────────────────────────────────────────────
 
-Only after the networking is complete will we install Docker, Docker Compose, Nginx, and the monitoring stack on the EC2 instance. This sequence mirrors how infrastructure teams typically build production environments.
+Monitoring Stack
+
+Prometheus
+Node Exporter
+cAdvisor
+Loki
+Promtail
+Grafana
+
+────────────────────────────────────────────────────────────────────────────
+
+Infrastructure
+
+AWS VPC
+EC2
+Security Groups
+IAM Roles
+EBS Volume
+CloudWatch (Optional)
+```
+
+---
+
+# High-Level Components
+
+| Layer                | Components                                          |
+| -------------------- | --------------------------------------------------- |
+| Presentation Layer   | frontend-main, frontend-admin, frontend-admission   |
+| API Layer            | backend-auth, backend-student, backend-notification |
+| Data Layer           | MongoDB Atlas                                       |
+| Security Layer       | IAM, Security Groups, Secrets Manager               |
+| Monitoring Layer     | Prometheus, Grafana, Loki                           |
+| Infrastructure Layer | EC2, VPC, EBS, Route Tables                         |
+
+---
+
+# Request Flow
+
+```text
+User
+
+↓
+
+Application Load Balancer
+
+↓
+
+Nginx
+
+↓
+
+Frontend
+
+↓
+
+Backend API
+
+↓
+
+MongoDB Atlas
+
+↓
+
+Response
+```
+
+---
+
+# Authentication Flow
+
+```text
+Admin Login
+
+↓
+
+frontend-admin
+
+↓
+
+backend-auth
+
+↓
+
+MongoDB
+
+↓
+
+JWT Token
+
+↓
+
+frontend-admin
+
+↓
+
+Authorization Header
+
+↓
+
+backend-student
+```
+
+---
+
+# Notification Flow
+
+```text
+Student Registration
+
+↓
+
+backend-student
+
+↓
+
+backend-notification
+
+↓
+
+SMTP
+
+↓
+
+Email Sent
+```
+
+---
+
+# Low-Level Design (LLD)
+
+The LLD contains the infrastructure, ports, networking, Docker services, security rules, and service communication.
+
+---
+
+## AWS Network
+
+```text
+VPC
+10.0.0.0/16
+│
+├── Public Subnet
+│      10.0.1.0/24
+│
+│      EC2 Ubuntu
+│
+│      Docker Compose
+│
+│      Nginx
+│
+│      frontend-main
+│
+│      frontend-admin
+│
+│      frontend-admission
+│
+│      backend-auth
+│
+│      backend-student
+│
+│      backend-notification
+│
+│      Prometheus
+│
+│      Grafana
+│
+│      Loki
+│
+│      Promtail
+│
+│      Node Exporter
+│
+│      cAdvisor
+│
+└── Internet Gateway
+```
+
+> **Phase 1 decision:** We will keep the EC2 instance in the public subnet to avoid the additional cost of a NAT Gateway. The VPC design will still allow us to move the application into a private subnet later.
+
+---
+
+# Docker Network
+
+```text
+Docker Network
+
+pn-network
+
+│
+
+├── nginx
+
+├── frontend-main
+
+├── frontend-admin
+
+├── frontend-admission
+
+├── backend-auth
+
+├── backend-student
+
+├── backend-notification
+
+├── prometheus
+
+├── grafana
+
+├── loki
+
+├── promtail
+
+├── cadvisor
+
+└── node-exporter
+```
+
+All containers communicate over this private Docker network.
+
+---
+
+# Backend Ports
+
+| Service              | Internal Port |
+| -------------------- | ------------: |
+| backend-auth         |          3001 |
+| backend-student      |          3002 |
+| backend-notification |          3003 |
+
+These are **internal** container ports and won't be exposed directly to the internet.
+
+---
+
+# Frontend Ports
+
+| Service            |        Internal Port |
+| ------------------ | -------------------: |
+| frontend-main      | 80 (served by Nginx) |
+| frontend-admin     | 80 (served by Nginx) |
+| frontend-admission | 80 (served by Nginx) |
+
+---
+
+# Reverse Proxy Routes
+
+```text
+/
+
+↓
+
+frontend-main
+```
+
+```text
+/admin
+
+↓
+
+frontend-admin
+```
+
+```text
+/admission
+
+↓
+
+frontend-admission
+```
+
+```text
+/api/auth
+
+↓
+
+backend-auth
+```
+
+```text
+/api/student
+
+↓
+
+backend-student
+```
+
+```text
+/api/notification
+
+↓
+
+backend-notification
+```
+
+This allows users to access all applications through a single domain.
+
+---
+
+# Secrets Manager
+
+We'll store these values securely:
+
+```text
+MONGODB_URI
+
+JWT_SECRET
+
+ADMIN_EMAIL
+
+ADMIN_PASSWORD
+
+SMTP_HOST
+
+SMTP_USER
+
+SMTP_PASS
+
+MAIL_FROM
+```
+
+The EC2 instance will use an IAM role to retrieve them.
+
+---
+
+# Monitoring Flow
+
+```text
+Node Exporter
+
+↓
+
+Prometheus
+
+↓
+
+Grafana Dashboard
+```
+
+```text
+cAdvisor
+
+↓
+
+Prometheus
+
+↓
+
+Grafana
+```
+
+```text
+Application Logs
+
+↓
+
+Promtail
+
+↓
+
+Loki
+
+↓
+
+Grafana
+```
+
+---
+
+# Storage
+
+| Data                | Storage             |
+| ------------------- | ------------------- |
+| Docker volumes      | EBS                 |
+| Uploads (initially) | EBS-mounted volume  |
+| Database            | MongoDB Atlas       |
+| Secrets             | AWS Secrets Manager |
+
+Later, we can migrate uploaded files from EBS to Amazon S3.
+
+---
+
+# Security
+
+```text
+Internet
+
+↓
+
+Security Group
+
+↓
+
+Nginx
+
+↓
+
+Docker Network
+
+↓
+
+Backend Services
+
+↓
+
+MongoDB Atlas
+```
+
+Users cannot directly access backend containers or MongoDB.
+
+---
+
+# Future Architecture (Phase 2)
+
+Once you've learned CI/CD and Kubernetes, this architecture can evolve without major redesign:
+
+```text
+GitHub
+    │
+GitHub Actions
+    │
+Amazon ECR
+    │
+Amazon EKS
+    │
+ALB
+    │
+Pods
+    │
+MongoDB Atlas
+```
+
+---
